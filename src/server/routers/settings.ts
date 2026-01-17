@@ -2,18 +2,19 @@ import { z } from "zod";
 import { router, protectedProcedure } from "@/lib/trpc/init";
 import { encrypt } from "@/lib/crypto";
 import { validateCloudflareToken } from "@/lib/cloudflare/dns";
+import { users } from "@/lib/db/schema";
+import { eq } from "drizzle-orm";
 
 export const settingsRouter = router({
   get: protectedProcedure.query(async ({ ctx }) => {
-    const user = await ctx.db.user.findUnique({
-      where: { id: ctx.user.id },
-      select: {
+    const user = await ctx.db.query.users.findFirst({
+      where: eq(users.id, ctx.user.id!),
+      columns: {
         id: true,
         name: true,
         email: true,
         githubUsername: true,
         cloudflareZone: true,
-        // Don't expose the actual token
         cloudflareToken: true,
       },
     });
@@ -32,10 +33,13 @@ export const settingsRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
-      return ctx.db.user.update({
-        where: { id: ctx.user.id },
-        data: input,
-      });
+      const [updated] = await ctx.db
+        .update(users)
+        .set({ ...input, updatedAt: new Date() })
+        .where(eq(users.id, ctx.user.id!))
+        .returning();
+
+      return updated;
     }),
 
   validateCloudflare: protectedProcedure
@@ -54,17 +58,23 @@ export const settingsRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       if (input.remove) {
-        await ctx.db.user.update({
-          where: { id: ctx.user.id },
-          data: {
+        await ctx.db
+          .update(users)
+          .set({
             cloudflareToken: null,
             cloudflareZone: null,
-          },
-        });
+            updatedAt: new Date(),
+          })
+          .where(eq(users.id, ctx.user.id!));
+
         return { success: true };
       }
 
-      const data: { cloudflareToken?: string; cloudflareZone?: string } = {};
+      const data: {
+        cloudflareToken?: string;
+        cloudflareZone?: string;
+        updatedAt: Date;
+      } = { updatedAt: new Date() };
 
       if (input.token) {
         // Validate token first
@@ -79,10 +89,10 @@ export const settingsRouter = router({
         data.cloudflareZone = input.zoneId;
       }
 
-      await ctx.db.user.update({
-        where: { id: ctx.user.id },
-        data,
-      });
+      await ctx.db
+        .update(users)
+        .set(data)
+        .where(eq(users.id, ctx.user.id!));
 
       return { success: true };
     }),

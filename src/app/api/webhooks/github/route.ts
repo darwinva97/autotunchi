@@ -5,6 +5,8 @@ import {
   parsePushEvent,
   extractBranchFromRef,
 } from "@/lib/github/webhooks";
+import { projects, deployments } from "@/lib/db/schema";
+import { eq, and } from "drizzle-orm";
 
 export async function POST(req: NextRequest) {
   try {
@@ -30,11 +32,11 @@ export async function POST(req: NextRequest) {
     }
 
     // Find matching project
-    const project = await db.project.findFirst({
-      where: {
-        repoFullName: parsedEvent.repository.full_name,
-        branch: branch,
-      },
+    const project = await db.query.projects.findFirst({
+      where: and(
+        eq(projects.repoFullName, parsedEvent.repository.full_name),
+        eq(projects.branch, branch)
+      ),
     });
 
     if (!project) {
@@ -54,14 +56,15 @@ export async function POST(req: NextRequest) {
     }
 
     // Create deployment record
-    const deployment = await db.deployment.create({
-      data: {
+    const [deployment] = await db
+      .insert(deployments)
+      .values({
         projectId: project.id,
         commitSha: parsedEvent.after,
         commitMsg: parsedEvent.head_commit?.message?.substring(0, 500) || null,
         status: "pending",
-      },
-    });
+      })
+      .returning();
 
     // TODO: Queue the actual build/deploy job
     // In a production system, this would send a message to a job queue

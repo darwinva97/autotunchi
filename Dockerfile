@@ -10,9 +10,6 @@ RUN npm ci
 # Copy source
 COPY . .
 
-# Generate Prisma client
-RUN npx prisma generate
-
 # Build Next.js
 RUN npm run build
 
@@ -44,8 +41,9 @@ ENV PATH="/root/.pulumi/bin:${PATH}"
 COPY --from=builder /app/public ./public
 COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/.next/static ./.next/static
-COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
-COPY --from=builder /app/prisma ./prisma
+
+# Copy drizzle migrations (if you want to run migrations on startup)
+COPY --from=builder /app/drizzle ./drizzle
 
 # Create directory for Pulumi state (if using file backend)
 RUN mkdir -p /app/.pulumi-state

@@ -4,6 +4,8 @@ import { buildProject } from "@/lib/builder";
 import { deployProject } from "@/lib/pulumi/automation";
 import { setupProjectDns } from "@/lib/cloudflare/dns";
 import { decryptJson } from "@/lib/crypto";
+import { deployments, projects, users } from "@/lib/db/schema";
+import { eq } from "drizzle-orm";
 
 export interface DeploymentJob {
   deploymentId: string;
@@ -13,11 +15,11 @@ export async function processDeployment(job: DeploymentJob): Promise<void> {
   const { deploymentId } = job;
 
   // Get deployment with project and user
-  const deployment = await db.deployment.findUnique({
-    where: { id: deploymentId },
-    include: {
+  const deployment = await db.query.deployments.findFirst({
+    where: eq(deployments.id, deploymentId),
+    with: {
       project: {
-        include: {
+        with: {
           user: true,
         },
       },
@@ -34,10 +36,10 @@ export async function processDeployment(job: DeploymentJob): Promise<void> {
 
   try {
     // Update status to building
-    await db.deployment.update({
-      where: { id: deploymentId },
-      data: { status: "building" },
-    });
+    await db
+      .update(deployments)
+      .set({ status: "building" })
+      .where(eq(deployments.id, deploymentId));
 
     // Get GitHub token
     const accessToken = await getGitHubAccessToken(project.userId);
@@ -60,23 +62,23 @@ export async function processDeployment(job: DeploymentJob): Promise<void> {
     });
 
     // Update with build logs
-    await db.deployment.update({
-      where: { id: deploymentId },
-      data: { buildLogs: buildResult.logs },
-    });
+    await db
+      .update(deployments)
+      .set({ buildLogs: buildResult.logs })
+      .where(eq(deployments.id, deploymentId));
 
     if (!buildResult.success) {
       throw new Error(buildResult.error || "Build failed");
     }
 
     // Update status to deploying
-    await db.deployment.update({
-      where: { id: deploymentId },
-      data: {
+    await db
+      .update(deployments)
+      .set({
         status: "deploying",
         imageTag: buildResult.imageTag,
-      },
-    });
+      })
+      .where(eq(deployments.id, deploymentId));
 
     // Decrypt env vars
     const envVars = decryptJson(JSON.stringify(project.envVars));
@@ -132,26 +134,26 @@ export async function processDeployment(job: DeploymentJob): Promise<void> {
     }
 
     // Mark as live
-    await db.deployment.update({
-      where: { id: deploymentId },
-      data: {
+    await db
+      .update(deployments)
+      .set({
         status: "live",
         finishedAt: new Date(),
-      },
-    });
+      })
+      .where(eq(deployments.id, deploymentId));
 
     console.log(`Deployment ${deploymentId} completed successfully`);
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : "Unknown error";
 
-    await db.deployment.update({
-      where: { id: deploymentId },
-      data: {
+    await db
+      .update(deployments)
+      .set({
         status: "failed",
         error: errorMessage,
         finishedAt: new Date(),
-      },
-    });
+      })
+      .where(eq(deployments.id, deploymentId));
 
     console.error(`Deployment ${deploymentId} failed:`, errorMessage);
   }

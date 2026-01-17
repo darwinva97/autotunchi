@@ -1,6 +1,8 @@
 import { z } from "zod";
 import { router, protectedProcedure } from "@/lib/trpc/init";
 import { TRPCError } from "@trpc/server";
+import { deployments, projects } from "@/lib/db/schema";
+import { eq, and, desc, lt } from "drizzle-orm";
 
 export const deploymentsRouter = router({
   list: protectedProcedure
@@ -13,29 +15,43 @@ export const deploymentsRouter = router({
     )
     .query(async ({ ctx, input }) => {
       // Verify project ownership
-      const project = await ctx.db.project.findFirst({
-        where: { id: input.projectId, userId: ctx.user.id },
+      const project = await ctx.db.query.projects.findFirst({
+        where: and(
+          eq(projects.id, input.projectId),
+          eq(projects.userId, ctx.user.id!)
+        ),
       });
 
       if (!project) {
         throw new TRPCError({ code: "NOT_FOUND" });
       }
 
-      const deployments = await ctx.db.deployment.findMany({
-        where: { projectId: input.projectId },
-        take: input.limit + 1,
-        cursor: input.cursor ? { id: input.cursor } : undefined,
-        orderBy: { createdAt: "desc" },
+      // Build query conditions
+      const conditions = [eq(deployments.projectId, input.projectId)];
+
+      if (input.cursor) {
+        const cursorDeployment = await ctx.db.query.deployments.findFirst({
+          where: eq(deployments.id, input.cursor),
+        });
+        if (cursorDeployment) {
+          conditions.push(lt(deployments.createdAt, cursorDeployment.createdAt));
+        }
+      }
+
+      const items = await ctx.db.query.deployments.findMany({
+        where: and(...conditions),
+        limit: input.limit + 1,
+        orderBy: [desc(deployments.createdAt)],
       });
 
       let nextCursor: string | undefined;
-      if (deployments.length > input.limit) {
-        const lastItem = deployments.pop();
+      if (items.length > input.limit) {
+        const lastItem = items.pop();
         nextCursor = lastItem?.id;
       }
 
       return {
-        items: deployments,
+        items,
         nextCursor,
       };
     }),
@@ -43,9 +59,11 @@ export const deploymentsRouter = router({
   get: protectedProcedure
     .input(z.object({ id: z.string() }))
     .query(async ({ ctx, input }) => {
-      const deployment = await ctx.db.deployment.findUnique({
-        where: { id: input.id },
-        include: { project: true },
+      const deployment = await ctx.db.query.deployments.findFirst({
+        where: eq(deployments.id, input.id),
+        with: {
+          project: true,
+        },
       });
 
       if (!deployment || deployment.project.userId !== ctx.user.id) {
@@ -58,9 +76,15 @@ export const deploymentsRouter = router({
   getLogs: protectedProcedure
     .input(z.object({ id: z.string() }))
     .query(async ({ ctx, input }) => {
-      const deployment = await ctx.db.deployment.findUnique({
-        where: { id: input.id },
-        include: { project: { select: { userId: true } } },
+      const deployment = await ctx.db.query.deployments.findFirst({
+        where: eq(deployments.id, input.id),
+        with: {
+          project: {
+            columns: {
+              userId: true,
+            },
+          },
+        },
       });
 
       if (!deployment || deployment.project.userId !== ctx.user.id) {
@@ -78,9 +102,15 @@ export const deploymentsRouter = router({
   cancel: protectedProcedure
     .input(z.object({ id: z.string() }))
     .mutation(async ({ ctx, input }) => {
-      const deployment = await ctx.db.deployment.findUnique({
-        where: { id: input.id },
-        include: { project: { select: { userId: true } } },
+      const deployment = await ctx.db.query.deployments.findFirst({
+        where: eq(deployments.id, input.id),
+        with: {
+          project: {
+            columns: {
+              userId: true,
+            },
+          },
+        },
       });
 
       if (!deployment || deployment.project.userId !== ctx.user.id) {
@@ -94,22 +124,27 @@ export const deploymentsRouter = router({
         });
       }
 
-      return ctx.db.deployment.update({
-        where: { id: input.id },
-        data: {
+      const [updated] = await ctx.db
+        .update(deployments)
+        .set({
           status: "failed",
           error: "Cancelled by user",
           finishedAt: new Date(),
-        },
-      });
+        })
+        .where(eq(deployments.id, input.id))
+        .returning();
+
+      return updated;
     }),
 
   rollback: protectedProcedure
     .input(z.object({ deploymentId: z.string() }))
     .mutation(async ({ ctx, input }) => {
-      const deployment = await ctx.db.deployment.findUnique({
-        where: { id: input.deploymentId },
-        include: { project: true },
+      const deployment = await ctx.db.query.deployments.findFirst({
+        where: eq(deployments.id, input.deploymentId),
+        with: {
+          project: true,
+        },
       });
 
       if (!deployment || deployment.project.userId !== ctx.user.id) {
@@ -124,15 +159,16 @@ export const deploymentsRouter = router({
       }
 
       // Create new deployment using the old image
-      const newDeployment = await ctx.db.deployment.create({
-        data: {
+      const [newDeployment] = await ctx.db
+        .insert(deployments)
+        .values({
           projectId: deployment.projectId,
           commitSha: deployment.commitSha,
           commitMsg: `Rollback to ${deployment.commitSha.substring(0, 7)}`,
           status: "pending",
           imageTag: deployment.imageTag,
-        },
-      });
+        })
+        .returning();
 
       // TODO: Queue the rollback deployment job
       // This would skip the build step and go straight to deploy

@@ -1,10 +1,12 @@
 import NextAuth from "next-auth";
 import GitHub from "next-auth/providers/github";
-import { PrismaAdapter } from "@auth/prisma-adapter";
+import { DrizzleAdapter } from "@auth/drizzle-adapter";
 import { db } from "./db";
+import { users, accounts } from "./db/schema";
+import { eq } from "drizzle-orm";
 
 export const { handlers, signIn, signOut, auth } = NextAuth({
-  adapter: PrismaAdapter(db),
+  adapter: DrizzleAdapter(db),
   providers: [
     GitHub({
       clientId: process.env.AUTH_GITHUB_ID!,
@@ -24,14 +26,15 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
       return session;
     },
     async signIn({ user, account, profile }) {
-      if (account?.provider === "github" && profile) {
+      if (account?.provider === "github" && profile && user.id) {
         // Store GitHub username
-        await db.user.update({
-          where: { id: user.id },
-          data: {
+        await db
+          .update(users)
+          .set({
             githubUsername: (profile as { login?: string }).login,
-          },
-        });
+            updatedAt: new Date(),
+          })
+          .where(eq(users.id, user.id));
       }
       return true;
     },
@@ -45,11 +48,8 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
 });
 
 export async function getGitHubAccessToken(userId: string): Promise<string | null> {
-  const account = await db.account.findFirst({
-    where: {
-      userId,
-      provider: "github",
-    },
+  const account = await db.query.accounts.findFirst({
+    where: eq(accounts.userId, userId),
   });
 
   return account?.access_token ?? null;

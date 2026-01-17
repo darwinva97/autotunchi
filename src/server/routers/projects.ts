@@ -10,6 +10,8 @@ import {
   deleteWebhook,
 } from "@/lib/github/client";
 import { TRPCError } from "@trpc/server";
+import { projects, deployments } from "@/lib/db/schema";
+import { eq, and, desc } from "drizzle-orm";
 
 function generateSlug(name: string): string {
   return name
@@ -20,27 +22,29 @@ function generateSlug(name: string): string {
 
 export const projectsRouter = router({
   list: protectedProcedure.query(async ({ ctx }) => {
-    return ctx.db.project.findMany({
-      where: { userId: ctx.user.id },
-      include: {
+    const userProjects = await ctx.db.query.projects.findMany({
+      where: eq(projects.userId, ctx.user.id!),
+      with: {
         deployments: {
-          take: 1,
-          orderBy: { createdAt: "desc" },
+          limit: 1,
+          orderBy: [desc(deployments.createdAt)],
         },
       },
-      orderBy: { updatedAt: "desc" },
+      orderBy: [desc(projects.updatedAt)],
     });
+
+    return userProjects;
   }),
 
   get: protectedProcedure
     .input(z.object({ id: z.string() }))
     .query(async ({ ctx, input }) => {
-      const project = await ctx.db.project.findFirst({
-        where: { id: input.id, userId: ctx.user.id },
-        include: {
+      const project = await ctx.db.query.projects.findFirst({
+        where: and(eq(projects.id, input.id), eq(projects.userId, ctx.user.id!)),
+        with: {
           deployments: {
-            take: 10,
-            orderBy: { createdAt: "desc" },
+            limit: 10,
+            orderBy: [desc(deployments.createdAt)],
           },
         },
       });
@@ -53,7 +57,7 @@ export const projectsRouter = router({
     }),
 
   getRepositories: protectedProcedure.query(async ({ ctx }) => {
-    const token = await getGitHubAccessToken(ctx.user.id);
+    const token = await getGitHubAccessToken(ctx.user.id!);
     if (!token) {
       throw new TRPCError({
         code: "UNAUTHORIZED",
@@ -67,7 +71,7 @@ export const projectsRouter = router({
   getBranches: protectedProcedure
     .input(z.object({ repoFullName: z.string() }))
     .query(async ({ ctx, input }) => {
-      const token = await getGitHubAccessToken(ctx.user.id);
+      const token = await getGitHubAccessToken(ctx.user.id!);
       if (!token) {
         throw new TRPCError({
           code: "UNAUTHORIZED",
@@ -97,7 +101,7 @@ export const projectsRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
-      const token = await getGitHubAccessToken(ctx.user.id);
+      const token = await getGitHubAccessToken(ctx.user.id!);
       if (!token) {
         throw new TRPCError({
           code: "UNAUTHORIZED",
@@ -108,14 +112,22 @@ export const projectsRouter = router({
       // Generate unique slug
       let slug = generateSlug(input.name);
       let suffix = 0;
-      while (await ctx.db.project.findUnique({ where: { slug } })) {
+      while (
+        await ctx.db.query.projects.findFirst({
+          where: eq(projects.slug, slug),
+        })
+      ) {
         suffix++;
         slug = `${generateSlug(input.name)}-${suffix}`;
       }
 
       // Generate subdomain
       let subdomain = slug;
-      while (await ctx.db.project.findUnique({ where: { subdomain } })) {
+      while (
+        await ctx.db.query.projects.findFirst({
+          where: eq(projects.subdomain, subdomain),
+        })
+      ) {
         subdomain = `${slug}-${randomBytes(4).toString("hex")}`;
       }
 
@@ -123,8 +135,9 @@ export const projectsRouter = router({
       const webhookSecret = randomBytes(32).toString("hex");
 
       // Create the project
-      const project = await ctx.db.project.create({
-        data: {
+      const [project] = await ctx.db
+        .insert(projects)
+        .values({
           name: input.name,
           slug,
           subdomain,
@@ -140,9 +153,9 @@ export const projectsRouter = router({
           memoryRequest: input.memoryRequest,
           replicas: input.replicas,
           webhookSecret,
-          userId: ctx.user.id,
-        },
-      });
+          userId: ctx.user.id!,
+        })
+        .returning();
 
       // Create GitHub webhook
       const [owner, repo] = input.repoFullName.split("/");
@@ -157,10 +170,10 @@ export const projectsRouter = router({
           webhookSecret
         );
 
-        await ctx.db.project.update({
-          where: { id: project.id },
-          data: { webhookId: webhookId.toString() },
-        });
+        await ctx.db
+          .update(projects)
+          .set({ webhookId: webhookId.toString() })
+          .where(eq(projects.id, project.id));
       } catch (error) {
         console.error("Failed to create webhook:", error);
         // Don't fail project creation, webhook can be added later
@@ -191,25 +204,28 @@ export const projectsRouter = router({
     .mutation(async ({ ctx, input }) => {
       const { id, ...data } = input;
 
-      const project = await ctx.db.project.findFirst({
-        where: { id, userId: ctx.user.id },
+      const project = await ctx.db.query.projects.findFirst({
+        where: and(eq(projects.id, id), eq(projects.userId, ctx.user.id!)),
       });
 
       if (!project) {
         throw new TRPCError({ code: "NOT_FOUND" });
       }
 
-      return ctx.db.project.update({
-        where: { id },
-        data,
-      });
+      const [updated] = await ctx.db
+        .update(projects)
+        .set({ ...data, updatedAt: new Date() })
+        .where(eq(projects.id, id))
+        .returning();
+
+      return updated;
     }),
 
   delete: protectedProcedure
     .input(z.object({ id: z.string() }))
     .mutation(async ({ ctx, input }) => {
-      const project = await ctx.db.project.findFirst({
-        where: { id: input.id, userId: ctx.user.id },
+      const project = await ctx.db.query.projects.findFirst({
+        where: and(eq(projects.id, input.id), eq(projects.userId, ctx.user.id!)),
       });
 
       if (!project) {
@@ -218,7 +234,7 @@ export const projectsRouter = router({
 
       // Delete webhook from GitHub
       if (project.webhookId) {
-        const token = await getGitHubAccessToken(ctx.user.id);
+        const token = await getGitHubAccessToken(ctx.user.id!);
         if (token) {
           const [owner, repo] = project.repoFullName.split("/");
           try {
@@ -229,8 +245,8 @@ export const projectsRouter = router({
         }
       }
 
-      // Delete project (cascades to deployments)
-      await ctx.db.project.delete({ where: { id: input.id } });
+      // Delete project (cascades to deployments due to FK constraint)
+      await ctx.db.delete(projects).where(eq(projects.id, input.id));
 
       return { success: true };
     }),
@@ -238,15 +254,18 @@ export const projectsRouter = router({
   triggerDeploy: protectedProcedure
     .input(z.object({ projectId: z.string() }))
     .mutation(async ({ ctx, input }) => {
-      const project = await ctx.db.project.findFirst({
-        where: { id: input.projectId, userId: ctx.user.id },
+      const project = await ctx.db.query.projects.findFirst({
+        where: and(
+          eq(projects.id, input.projectId),
+          eq(projects.userId, ctx.user.id!)
+        ),
       });
 
       if (!project) {
         throw new TRPCError({ code: "NOT_FOUND" });
       }
 
-      const token = await getGitHubAccessToken(ctx.user.id);
+      const token = await getGitHubAccessToken(ctx.user.id!);
       if (!token) {
         throw new TRPCError({
           code: "UNAUTHORIZED",
@@ -258,14 +277,15 @@ export const projectsRouter = router({
       const commit = await getLatestCommit(token, owner, repo, project.branch);
 
       // Create deployment record
-      const deployment = await ctx.db.deployment.create({
-        data: {
+      const [deployment] = await ctx.db
+        .insert(deployments)
+        .values({
           projectId: project.id,
           commitSha: commit.sha,
           commitMsg: commit.message.substring(0, 500),
           status: "pending",
-        },
-      });
+        })
+        .returning();
 
       // TODO: Queue the actual build/deploy job
       // For now, we just create the record
