@@ -1,0 +1,25 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: autotunchi-config
+  namespace: autotunchi
+  labels:
+    app.kubernetes.io/name: autotunchi
+    app.kubernetes.io/component: config
+data:
+  # URL pública de la aplicación
+  AUTH_URL: "https://autotunchi.smartperu.tech"
+  NEXT_PUBLIC_PLATFORM_DOMAIN: "smartperu.tech"
+
+  # Pulumi backend - filesystem local (sin dependencias externas)
+  PULUMI_BACKEND_URL: "file:///app/.pulumi-state"
+
+  # Container Registry - tu registry self-hosted
+  # Opciones: registry.registry.svc.cluster.local:5000 o ghcr.io/darwinva97
+  REGISTRY_URL: "ghcr.io/darwinva97"
+  REGISTRY_INSECURE: "false"
+
+  # Platform configuration
+  PLATFORM_DOMAIN: "smartperu.tech"
+  INGRESS_CLASS: "traefik"
+  INGRESS_IP: ""

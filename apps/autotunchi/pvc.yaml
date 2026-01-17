@@ -1,0 +1,33 @@
+# PostgreSQL storage
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: autotunchi-postgres-pvc
+  namespace: autotunchi
+  labels:
+    app.kubernetes.io/name: autotunchi
+    app.kubernetes.io/component: database
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+  storageClassName: local-path
+---
+# Pulumi state storage (si usas file:// backend)
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: autotunchi-pulumi-state
+  namespace: autotunchi
+  labels:
+    app.kubernetes.io/name: autotunchi
+    app.kubernetes.io/component: state
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+  storageClassName: local-path

@@ -1,0 +1,67 @@
+# ============================================================
+# AGREGAR ESTO A TU kubernetes-cluster/clusters/k3s/root-app.yaml
+# En la sección de aplicaciones, junto a system-crm, openproject, etc.
+# ============================================================
+
+# AutoTunchi - Plataforma de despliegue self-hosted
+- apiVersion: argoproj.io/v1alpha1
+  kind: Application
+  metadata:
+    name: autotunchi
+    namespace: argocd
+    finalizers:
+      - resources-finalizer.argocd.argoproj.io
+  spec:
+    project: default
+    source:
+      repoURL: git@github.com:darwinva97/autotunchi.git  # Cambiar a tu repo
+      targetRevision: main
+      path: apps/autotunchi
+    destination:
+      server: https://kubernetes.default.svc
+      namespace: autotunchi
+    syncPolicy:
+      automated:
+        prune: true
+        selfHeal: true
+        allowEmpty: false
+      syncOptions:
+        - CreateNamespace=true
+        - PrunePropagationPolicy=foreground
+        - PruneLast=true
+      retry:
+        limit: 5
+        backoff:
+          duration: 5s
+          factor: 2
+          maxDuration: 3m
+
+# ============================================================
+# PASOS ADICIONALES REQUERIDOS:
+# ============================================================
+#
+# 1. Crear el secret de GitHub Container Registry en namespace autotunchi:
+#
+#    kubectl create secret docker-registry ghcr-secret \
+#      --namespace autotunchi \
+#      --docker-server=ghcr.io \
+#      --docker-username=darwinva97 \
+#      --docker-password=<TU_GITHUB_PAT>
+#
+# 2. Crear GitHub OAuth App:
+#    - Ir a: github.com/settings/developers
+#    - New OAuth App
+#    - Application name: AutoTunchi
+#    - Homepage URL: https://autotunchi.smartperu.tech
+#    - Callback URL: https://autotunchi.smartperu.tech/api/auth/callback/github
+#    - Copiar Client ID y Client Secret a secrets.yaml
+#
+# 3. Generar secrets seguros:
+#    openssl rand -base64 32  # Para AUTH_SECRET
+#    openssl rand -base64 32  # Para ENCRYPTION_KEY
+#
+# 4. Construir y pushear la imagen:
+#    docker build -t ghcr.io/darwinva97/autotunchi:latest .
+#    docker push ghcr.io/darwinva97/autotunchi:latest
+#
+# ============================================================

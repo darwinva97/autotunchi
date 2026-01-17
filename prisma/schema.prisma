@@ -1,0 +1,111 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String  @map("user_id")
+  type              String
+  provider          String
+  providerAccountId String  @map("provider_account_id")
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@map("accounts")
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique @map("session_token")
+  userId       String   @map("user_id")
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("sessions")
+}
+
+model User {
+  id              String    @id @default(cuid())
+  name            String?
+  email           String?   @unique
+  emailVerified   DateTime? @map("email_verified")
+  image           String?
+  githubUsername  String?   @map("github_username")
+  cloudflareToken String?   @map("cloudflare_token") @db.Text // Encrypted
+  cloudflareZone  String?   @map("cloudflare_zone")
+  accounts        Account[]
+  sessions        Session[]
+  projects        Project[]
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  @@map("users")
+}
+
+model VerificationToken {
+  identifier String
+  token      String
+  expires    DateTime
+
+  @@unique([identifier, token])
+  @@map("verification_tokens")
+}
+
+model Project {
+  id            String       @id @default(cuid())
+  name          String
+  slug          String       @unique
+  repoFullName  String       @map("repo_full_name") // e.g., "owner/repo"
+  branch        String       @default("main")
+  buildCommand  String?      @map("build_command")
+  startCommand  String?      @map("start_command")
+  port          Int          @default(3000)
+  envVars       Json         @default("{}") @map("env_vars") // Encrypted JSON
+  nodeAffinity  String?      @map("node_affinity")
+  cpuLimit      String       @default("500m") @map("cpu_limit")
+  cpuRequest    String       @default("100m") @map("cpu_request")
+  memoryLimit   String       @default("512Mi") @map("memory_limit")
+  memoryRequest String       @default("128Mi") @map("memory_request")
+  replicas      Int          @default(1)
+  subdomain     String       @unique
+  customDomain  String?      @map("custom_domain")
+  webhookId     String?      @map("webhook_id")
+  webhookSecret String       @map("webhook_secret")
+  userId        String       @map("user_id")
+  user          User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  deployments   Deployment[]
+  createdAt     DateTime     @default(now()) @map("created_at")
+  updatedAt     DateTime     @updatedAt @map("updated_at")
+
+  @@map("projects")
+}
+
+model Deployment {
+  id         String    @id @default(cuid())
+  projectId  String    @map("project_id")
+  project    Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  commitSha  String    @map("commit_sha")
+  commitMsg  String?   @map("commit_msg")
+  status     String    @default("pending") // pending, building, deploying, live, failed
+  logs       String?   @db.Text
+  imageTag   String?   @map("image_tag")
+  buildLogs  String?   @map("build_logs") @db.Text
+  error      String?   @db.Text
+  createdAt  DateTime  @default(now()) @map("created_at")
+  finishedAt DateTime? @map("finished_at")
+
+  @@map("deployments")
+}

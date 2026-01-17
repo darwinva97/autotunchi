@@ -1,0 +1,21 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: autotunchi
+
+resources:
+  - namespace.yaml
+  - secrets.yaml
+  - configmap.yaml
+  - serviceaccount.yaml
+  - postgres.yaml
+  - pvc.yaml
+  - deployment.yaml
+  - ingress.yaml
+
+commonLabels:
+  app.kubernetes.io/name: autotunchi
+  app.kubernetes.io/part-of: autotunchi
+  app.kubernetes.io/managed-by: argocd
+  cluster: k3s
+  environment: production
