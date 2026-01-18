@@ -1,0 +1,6 @@
+onlyBuiltDependencies:
+  - '@pulumi/kubernetes'
+  - esbuild
+  - protobufjs
+  - sharp
+  - unrs-resolver
